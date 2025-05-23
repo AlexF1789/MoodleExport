@@ -15,6 +15,6 @@ parser.add_argument("file", help="instruction file given you from Moodle web int
 # we parse the arguments
 args = parser.parse_args()
 
-# we export according to the file content
+# we export according to the file content, not passing an argument for max_workers means we're using 2*os.cpu_count()
 exp = Exporter(args.file)
 exp.execute_commands()

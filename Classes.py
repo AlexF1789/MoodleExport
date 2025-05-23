@@ -5,26 +5,27 @@
 
 # Classes.py -> this file contains the definition of classes used in the main.py script
 
-import os, json, requests, base64
+import os, json, base64, time
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from concurrent.futures import ThreadPoolExecutor
 from pprint import pprint
 
 class Command:
+    # class used to store the commands in an OOP style, we could have used a dictionary instead but like this it's more concise and safe in type check
     def __init__(self, name: str, argument: str):
         self.name = name
         self.argument = argument
 
 class Exporter:
-    def __init__(self, file_name):
+    def __init__(self, file_name: str, max_workers: int=2*os.cpu_count()):
         # initialization of the attributes
         self.commands = []
         self.name = None
         self.cookies = None
         self.current_student = 0
         self.chrome_driver = None
-        self.max_workers = 32
+        self.max_workers = max_workers
 
         # file opening to save the commands
         with open(file_name, 'r', encoding='utf-8') as file:
@@ -44,13 +45,16 @@ class Exporter:
         return command_name not in ['save_text']
     
     def execute_commands(self):
+        # method used to execute the commands parsed from the configuration file
         current_student = 0
         commands = {
             'supposed': len(self.commands),
             'executed': 0,
             'ignored': 0,
             'file saved': 0,
-            'file errors': 0
+            'file errors': 0,
+            'start': time.ctime(),
+            'end': None
         }
 
         futures = []
@@ -106,6 +110,9 @@ class Exporter:
 
         self.chrome_driver.quit()
 
+        # here we save the end of commands execution stats
+        commands['end'] = time.ctime()
+
         # stats print for debug
         print('commands executed with the following stats:')
         pprint(commands)
@@ -123,11 +130,12 @@ class Exporter:
         
 
     def __create_directory(self):
+        # method to create the directory where the reports will be saved (output/<zip-name>)
         directory = os.path.join('output', self.name)
         os.makedirs(directory, exist_ok=True)
 
-    def __setup_chrome(self, link):
-            # work on the address
+    def __setup_chrome(self, link: str):
+            # from a casual link we're filtering the address to configure the selenium instance
             secure = link[4] == 's'
             address = link[(8 if secure else 7):].split('/')[0]
 
@@ -138,7 +146,7 @@ class Exporter:
 
             complete_address = ('https://' if secure else 'http://') + address + ':' + port
 
-            # chrome setup
+            # we configure chrome options and create the driver passing them as a parameter
             chrome_options = Options()
             chrome_options.add_argument('--headless')
             chrome_options.add_argument('--disable-gpu')
@@ -150,7 +158,7 @@ class Exporter:
             if 'MoodleSession' not in self.cookies:
                 raise Exception('missing Moodle cookie!')
             
-            # to add the cookie we must visit the domain at least once
+            # to add the cookie we must visit the domain at least once, after having done so we add the cookie
             self.chrome_driver.get(complete_address)
 
             self.chrome_driver.add_cookie({
@@ -159,6 +167,7 @@ class Exporter:
                 'domain': address
             })
 
+            # here we define the print options which will be used later while saving the PDFs
             self.print_options = {
                 'landscape': False,
                 'displayHeaderFooter': False,
@@ -168,7 +177,8 @@ class Exporter:
                 'paperHeight': 11.69
             }
 
-    def __save_pdf(self, link, current_attempt):
+    def __save_pdf(self, link: str, current_attempt: int) -> bool:
+        # method used to save a certain URL to a PDF document, it works only if the chrome_driver has been initialized
         try:
             self.chrome_driver.get(link)
             print(f'Exporting the {current_attempt} attempt...')
@@ -179,18 +189,3 @@ class Exporter:
         except:
             print(f'Error exporting the {current_attempt} attempt...')
             return False
-
-    # def __save_pdf(self, link, current_attempt):
-    #     # we make the GET request
-    #     response = requests.get(link, cookies=self.cookies)
-
-    #     # we analize the request status code
-    #     if response.status_code == 200:
-    #         print(f'Esporting the {current_attempt} attempt...')
-    #         # pdfkit.from_string(response.text, os.path.join('output', self.name, f'{current_attempt}.pdf'), options={'quiet':''})
-    #         with open(os.path.join('output', self.name, f'{current_attempt}.pdf'), 'wb') as output_file:
-    #             output_file.write(weasyprint.HTML(string=response.text).write_pdf())
-    #         return True
-        
-    #     print(f'the request for student {self.current_student} had code {response.status_code} as a reply')
-    #     return False
