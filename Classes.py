@@ -5,7 +5,9 @@
 
 # Classes.py -> this file contains the definition of classes used in the main.py script
 
-import os, json, requests, base64, pdfkit
+import os, json, requests, base64
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 from concurrent.futures import ThreadPoolExecutor
 from pprint import pprint
 
@@ -21,6 +23,8 @@ class Exporter:
         self.name = None
         self.cookies = None
         self.current_student = 0
+        self.chrome_driver = None
+        self.max_workers = 32
 
         # file opening to save the commands
         with open(file_name, 'r', encoding='utf-8') as file:
@@ -50,7 +54,7 @@ class Exporter:
         }
 
         futures = []
-        with ThreadPoolExecutor(max_workers=os.cpu_count()) as thread_pool:
+        with ThreadPoolExecutor(max_workers=self.max_workers) as thread_pool:
             # for each command we execute it
             for command in self.commands:
                 command: Command # type annotation for command
@@ -80,6 +84,10 @@ class Exporter:
                         if self.cookies is None or self.name is None:
                             raise Exception('File not formatted correctly! Quiz name and/or session cookie missing')
                         
+                        # in case we didn't setup the chrome driver we proceed
+                        if self.chrome_driver is None:
+                            self.__setup_chrome(command.argument)
+                        
                         # we append the __save_pdf method call to the thread pool incrementing the current student number for the pdf file name
                         current_student += 1
                         futures.append(thread_pool.submit(self.__save_pdf, command.argument, current_student))
@@ -95,6 +103,8 @@ class Exporter:
                 commands['file saved'] += 1
             else:
                 commands['file errors'] += 1
+
+        self.chrome_driver.quit()
 
         # stats print for debug
         print('commands executed with the following stats:')
@@ -116,15 +126,71 @@ class Exporter:
         directory = os.path.join('output', self.name)
         os.makedirs(directory, exist_ok=True)
 
-    def __save_pdf(self, link, current_attempt):
-        # we make the GET request
-        response = requests.get(link, cookies=self.cookies)
+    def __setup_chrome(self, link):
+            # work on the address
+            secure = link[4] == 's'
+            address = link[(8 if secure else 7):].split('/')[0]
 
-        # we analize the request status code
-        if response.status_code == 200:
-            print(f'Esporting the {current_attempt} attempt...')
-            pdfkit.from_string(response.text, os.path.join('output', self.name, f'{current_attempt}.pdf'), options={'quiet':''})
+            if ':' in address:
+                address, port = address.split(':')
+            else:
+                port = 443 if secure else 80
+
+            complete_address = ('https://' if secure else 'http://') + address + ':' + port
+
+            # chrome setup
+            chrome_options = Options()
+            chrome_options.add_argument('--headless')
+            chrome_options.add_argument('--disable-gpu')
+            chrome_options.add_argument('--no-sandbox')
+
+            self.chrome_driver = webdriver.Chrome(options=chrome_options)
+
+            # we add the MoodleSession cookie
+            if 'MoodleSession' not in self.cookies:
+                raise Exception('missing Moodle cookie!')
+            
+            # to add the cookie we must visit the domain at least once
+            self.chrome_driver.get(complete_address)
+
+            self.chrome_driver.add_cookie({
+                'name': 'MoodleSession',
+                'value': self.cookies['MoodleSession'],
+                'domain': address
+            })
+
+            self.print_options = {
+                'landscape': False,
+                'displayHeaderFooter': False,
+                'printBackground': True,
+                'preferCSSPageSize': True,
+                'paperWidth': 8.27,
+                'paperHeight': 11.69
+            }
+
+    def __save_pdf(self, link, current_attempt):
+        try:
+            self.chrome_driver.get(link)
+            print(f'Exporting the {current_attempt} attempt...')
+            pdf = self.chrome_driver.execute_cdp_cmd('Page.printToPDF', self.print_options)
+            with open(os.path.join('output', self.name, f'{current_attempt}.pdf'), 'wb') as output_file:
+                output_file.write(base64.b64decode(str(pdf)))
             return True
+        except:
+            print(f'Error exporting the {current_attempt} attempt...')
+            return False
+
+    # def __save_pdf(self, link, current_attempt):
+    #     # we make the GET request
+    #     response = requests.get(link, cookies=self.cookies)
+
+    #     # we analize the request status code
+    #     if response.status_code == 200:
+    #         print(f'Esporting the {current_attempt} attempt...')
+    #         # pdfkit.from_string(response.text, os.path.join('output', self.name, f'{current_attempt}.pdf'), options={'quiet':''})
+    #         with open(os.path.join('output', self.name, f'{current_attempt}.pdf'), 'wb') as output_file:
+    #             output_file.write(weasyprint.HTML(string=response.text).write_pdf())
+    #         return True
         
-        print(f'the request for student {self.current_student} had code {response.status_code} as a reply')
-        return False
+    #     print(f'the request for student {self.current_student} had code {response.status_code} as a reply')
+    #     return False
